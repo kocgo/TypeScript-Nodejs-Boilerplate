@@ -1,7 +1,16 @@
 import puppeteer from "puppeteer";
+import Binance from "node-binance-api";
 require("dotenv").config();
 
-const followedUser = "Costi";
+const binance = new Binance().options({
+  APIKEY: process.env.API_KEY,
+  APISECRET: process.env.API_SECRET,
+});
+
+const followedUser = "BoJack";
+const channelName = "GF";
+const quantity = 1;
+let stepSize;
 
 (async () => {
   const browser = await puppeteer.launch({
@@ -63,11 +72,9 @@ const followedUser = "Costi";
 
   await page.waitForSelector(`div[aria-label="Home"]`);
   await page.waitForTimeout(3000);
-  await clickByText("GF");
+  await clickByText(channelName);
 
   await page.focus(`div[aria-label="Message #genel"]`);
-  // await page.keyboard.type(`I AM BOT AMK`);
-  // await page.keyboard.press("Enter");
 
   let state = {
     lastMessage: {
@@ -88,16 +95,82 @@ const followedUser = "Costi";
 
   async function loop() {
     const res = await getLastMessage();
-    if (res.author !== "Costi" || res.text === state.lastMessage.text) return;
+    if (res.author !== followedUser || res.text === state.lastMessage.text)
+      return;
+
     state.lastMessage = res;
 
     const reg = RegExp(/[#][A-Za-z]{3,4}/);
-    const cn = reg.exec(res.text)?.[0];
+    const coinName = reg.exec(res.text)?.[0].split("#")[1];
 
-    if (!cn) return;
+    if (!coinName) return;
 
-    await page.keyboard.type(`Costi gave a coin name: ${cn}`);
-    await page.keyboard.press("Enter");
+    let price;
+
+    await new Promise((resolve, reject) =>
+      binance.exchangeInfo(function (error, data) {
+        let minimums = {};
+        for (let obj of data.symbols) {
+          let filters = { status: obj.status };
+          if (obj.symbol === "WINUSDT") {
+            console.log(obj);
+            for (let filter of obj.filters) {
+              if (filter.filterType == "LOT_SIZE") {
+                stepSize = filter.stepSize;
+                resolve("ok");
+              }
+            }
+          }
+        }
+      })
+    );
+
+    binance.prices(`${coinName.toUpperCase()}USDT`, async (error, ticker) => {
+      try {
+        let price = ticker[`${coinName.toUpperCase()}USDT`];
+
+        await page.keyboard.type(
+          `${followedUser} gave a coin name: ${coinName}, which is priced: ${price}`
+        );
+
+        await page.keyboard.press("Enter");
+
+        binance.marketBuy(
+          `${coinName.toUpperCase()}USDT`,
+          6200,
+          (error, response) => {
+            if (error) {
+              console.log(error.body, error.statusCode);
+            } else if (response) {
+              binance.balance((error, balances) => {
+                if (error) return console.error(error);
+                console.info("balances()", balances);
+
+                const amount = binance.roundStep(
+                  parseFloat(balances["WIN"].available),
+                  stepSize
+                );
+
+                setTimeout(() => {
+                  binance.marketSell(
+                    `${coinName.toUpperCase()}USDT`,
+                    amount,
+                    (error, response) => {
+                      if (error) {
+                        console.log(error.body, error.statusCode);
+                      }
+                    }
+                  );
+                }, 15000);
+              });
+            }
+            console.log(Object.keys(response));
+          }
+        );
+      } catch (e) {
+        console.log(e);
+      }
+    });
   }
 
   setInterval(loop, 100);
